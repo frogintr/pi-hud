@@ -764,7 +764,8 @@ function pushSpeedSample(s: SpeedSample): void {
   if (speedSamples.length > SPEED_KEEP) speedSamples.shift();
 }
 
-/** 状态栏尾部的速度段：`ttft 0.9s · 42.1 t/s`；没样本时返回 null（不显示）。 */
+/** 与上下文同一行的速度段：`ttft 0.9s · 42.1 tokens/s`；没样本时返回 null（不显示）。
+ *  不用 "t/s" 这种缩写：一眼看不出是什么单位。 */
 function speedLine(): string | null {
   if (speedSamples.length === 0) return null;
   const ttft = speedSamples.reduce((s, x) => s + x.ttft, 0) / speedSamples.length;
@@ -773,7 +774,7 @@ function speedLine(): string | null {
   const wait = ttft >= 10_000 ? `${Math.round(ttft / 1000)}s` : `${(ttft / 1000).toFixed(1)}s`;
   if (tps == null) return `ttft ${wait}`;
   const rate = tps >= 100 ? tps.toFixed(0) : tps.toFixed(1);
-  return `ttft ${wait} · ${rate} t/s`;
+  return `ttft ${wait} · ${rate} tokens/s`;
 }
 
 function lineText(p: PoolLine, theme?: any): string {
@@ -830,13 +831,13 @@ function renderStatus(ctx: any) {
     // 第一行走状态栏（setStatus）；其余行走编辑器下方的 widget（setWidget，placement:"belowEditor"）。
     // 注意 pi 的 setWidget 是「按 key 整组替换」：同一 key 先删 above 再删 below，
     // 所以 ctx 行的 refresh 绝不能带 lines 调用，否则会把额度行整组清掉。
+    // 第一行只放「上下文 + 延迟/吞吐」：模型与 provider 由 pi 自己的 footer 右侧显示，
+    // 这里再写一遍既重复又占位置。整块高度因此少一行（不再占用 footer 的扩展状态行）。
     const head: string[] = [];
-    // 1) provider-model
-    head.push(modelId || provider || "ctx");
-    // 2) ctx
     const ctxLine = contextLine(ctx);
     if (ctxLine) head.push(lineText(ctxLine, theme));
-    // ttft / t/s 不放这里：它走 footer 的扩展状态行（在 pwd 与用量行之后），见下
+    const speed = speedLine();
+    if (speed) head.push(speed);
     // 3) 5h / 7d（模型级组优先匹配；无 modelId 的组=订阅级）
     const parts: string[] = [];
     if (sourceId) {
@@ -875,36 +876,27 @@ function renderStatus(ctx: any) {
         }
       }
     }
-    // 布局（v7）：
-    //   第一行：模型 + 上下文占用(ctx)
-    //   第二行起：usage 限额。按 " · " 分段换行，一行不超过 ~96 列，
-    //            所以 workbuddy 的 Credits / Extra credits 一行、模型 token 窗一行。
-    //   ttft / t/s：不进 widget，走 ctx.ui.setStatus（footer 的扩展状态行），
-    //             渲染在 pi 自己的 pwd 行与用量行之后，不占 widget 位置。
-    const line1 = head.join(" · ");
+    // 布局（v8）：
+    //   第一行：ctx + ttft + tokens/s（一行说清「现在花了多少上下文、模型多快」）
+    //   之后：usage 限额。按 " · " 分段换行，一行不超过 ~96 列，
+    //         所以 workbuddy 的 Credits / Extra credits 一行、模型 token 窗一行。
+    //   不再往 pi 的 footer 追加状态行：那会多占一行终端高度。
+    const meta = head.join(" · ");
     const quotaLines = wrapSegments(parts, Math.min(widgetWidth(), envInt("PI_HUD_LINE_WIDTH", QUOTA_LINE_MAX)));
-    const widgetLines = [line1, ...quotaLines];
-    const speed = speedLine();
-
-    // footer 扩展状态行：pi 会把所有扩展的 setStatus 拼成一行（按 key 排序）。
-    // 本机只有 pi-hud 用 status，所以这一行就只有速度。
-    try {
-      ctx.ui.setStatus?.("pi-hud-speed", speed ?? undefined);
-    } catch {
-      /* 老版本没有 setStatus */
-    }
+    const widgetLines = meta ? [meta, ...quotaLines] : quotaLines;
 
     if (ctx.ui?.setWidget) {
-      // 整组放入 setWidget("pi-hud", [line1, ...quota], placement: "belowEditor")：
-      // 上下文行在前，额度行在后，紧贴在输入框下方
+      // 整组放入 setWidget("pi-hud", [meta, ...quota], placement: "belowEditor")：
+      // ctx+速度一行在前，额度行在后，紧贴在输入框下方
       ctx.ui.setWidget("pi-hud", widgetLines, { placement: "belowEditor" });
       ctx.ui.setWidget("pi-hud-quota", undefined); // 清理旧 key
       ctx.ui.setStatus("pi-hud", undefined);       // 清理底栏旧位置，不重复占用
+      ctx.ui.setStatus?.("pi-hud-speed", undefined); // v7 曾把速度放 footer，升级时清掉
       widgetShown = true;
     } else if (ctx.ui?.setStatus) {
       // 无 setWidget 环境（单测/降级）回退单行
-      const flat = [line1, ...quotaLines].filter(Boolean).join(" · ");
-      ctx.ui.setStatus("pi-hud", flat ? `${flat}${speed ? ` · ${speed}` : ""}` : undefined);
+      const flat = widgetLines.filter(Boolean).join(" · ");
+      ctx.ui.setStatus("pi-hud", flat || undefined);
     }
   } catch {
     /* 渲染失败不影响主流程 */

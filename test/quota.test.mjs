@@ -6,12 +6,11 @@ import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import vm from 'node:vm';
 
 process.env.TZ = 'UTC';
-const HUD = fileURLToPath(new URL('../extensions/pi-hud.ts', import.meta.url));
+const HUD = path.join(homedir(), '.pi/agent/extensions/pi-hud.ts');
 const NOW = Date.parse('2026-10-21T04:45:00Z');
 
 // 以下 fixture 逐字取自 127.0.0.1:3425/v1/magpie/quotas 的实际响应
@@ -203,7 +202,7 @@ test('命名变化（未来 vendor 带新 pool 全不匹配）→ 退化为显�
     sessionManager: { getEntries: () => [] },
   });
   const line = statuses.at(-1);
-  assert.ok(line.startsWith('newvendor/some-model · '), line);
+  // v8：第一行不再重复模型名（pi footer 已有），陌生池退化时直接铺满一行
   assert.ok(line.includes('Heavy·5h') && line.includes('Light·5h'), '两个池都渲染: ' + line);
 });
 
@@ -353,7 +352,7 @@ test('speedLine：ttft 与 t/s 取最近几轮均值', () => {
   const hud = loadHud();
   hud.pushSpeedSample({ ttft: 400, tps: 40, out: 300 });
   hud.pushSpeedSample({ ttft: 800, tps: 50, out: 500 });
-  assert.equal(hud.speedLine(), 'ttft 0.6s · 45.0 t/s');
+  assert.equal(hud.speedLine(), 'ttft 0.6s · 45.0 tokens/s');
 });
 
 test('speedLine：输出太短的轮次只贡献 ttft，不进 tps 均值', () => {
@@ -361,17 +360,17 @@ test('speedLine：输出太短的轮次只贡献 ttft，不进 tps 均值', () =
   hud.pushSpeedSample({ ttft: 600, tps: 999, out: 10 });   // 工具调用轮
   assert.equal(hud.speedLine(), 'ttft 0.6s');
   hud.pushSpeedSample({ ttft: 600, tps: 60, out: 400 });
-  assert.equal(hud.speedLine(), 'ttft 0.6s · 60.0 t/s');
+  assert.equal(hud.speedLine(), 'ttft 0.6s · 60.0 tokens/s');
 });
 
 test('speedLine：只保留最近 5 轮；慢启动/大数值格式化', () => {
   const hud = loadHud();
   for (let i = 0; i < 7; i++) hud.pushSpeedSample({ ttft: 1000 * (i + 1), tps: 100 + i, out: 200 });
   // 只剩 ttft 3s..7s → 均值 5s；tps 102..106 → 104
-  assert.equal(hud.speedLine(), 'ttft 5.0s · 104 t/s');
+  assert.equal(hud.speedLine(), 'ttft 5.0s · 104 tokens/s');
   const slow = loadHud();
   slow.pushSpeedSample({ ttft: 12_400, tps: 20, out: 200 });
-  assert.equal(slow.speedLine(), 'ttft 12s · 20.0 t/s');
+  assert.equal(slow.speedLine(), 'ttft 12s · 20.0 tokens/s');
 });
 
 // ── 状态栏排版：按段换行 ───────────────────────────────────────────────
@@ -426,9 +425,10 @@ test('widget 行：workbuddy 的三段额度排成两行', async () => {
     sessionManager: { getEntries: () => [] },
   });
   const lines = widgets.at(-1);
-  assert.equal(lines.length, 3, JSON.stringify(lines));
-  assert.match(lines[1], /Credits .*Extra credits/);
-  assert.match(lines[2], /^deepseek-v4\.1-flash tokens/);
+  // 该 ctx 没有 getContextUsage/entries → 没有 ctx 行，只剩两行额度
+  assert.equal(lines.length, 2, JSON.stringify(lines));
+  assert.match(lines[0], /Credits .*Extra credits/);
+  assert.match(lines[1], /^deepseek-v4\.1-flash tokens/);
 });
 
 // ── grok / xAI：GrokBot 混合额度 + 官方 CLI 凭据兜底 ───────────────────

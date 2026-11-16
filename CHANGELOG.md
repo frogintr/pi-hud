@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.0] - 2026-11-16
+
+- One meta line: `ctx … · ttft … · N tokens/s` (was: model + ctx in the widget, speed on a
+  separate footer status line). The model is no longer repeated — pi's footer already shows it.
+- No extension status line in pi's footer any more, so the bottom of the screen lost a line.
+- Speed reads `tokens/s` instead of the `t/s` abbreviation.
+- `test/providers.test.mjs`: direct `kimi-coding` and `anthropic` paths covered alongside
+  `openai-codex` and `openrouter`.
+- README rewritten with narrow tables so it renders on GitHub without squeezing cells.
+
 ## [0.8.0] - 2026-11-16
 
 - xAI: Grok + X unified plan ("GrokBot") is read from `isUnifiedBillingUser` payloads (`creditUsagePercent`, or
