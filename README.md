@@ -36,8 +36,10 @@ pi -e git:github.com/frogintr/pi-hud
 or copy `extensions/pi-hud.ts` into `~/.pi/agent/extensions/` — it is one file with no runtime dependencies
 (only type imports from pi). Run `/reload` afterwards.
 
-> Installing the package *and* keeping a copy in `~/.pi/agent/extensions/` loads the extension twice and draws the
-> widget twice. Pick one.
+> Installing the package *and* keeping a copy in `~/.pi/agent/extensions/` loads the extension **twice**. Both
+> instances write the same widget key (`pi-hud`) and the same status key (`pi-hud-speed`), so the last render wins and
+> you do not see doubled lines — but you do get two pollers hitting every endpoint, two independent TTFT/t-s histories
+> (the numbers jump), and two timers to clean up on `/reload`. Pick one.
 
 ## What it reads
 
