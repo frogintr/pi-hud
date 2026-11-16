@@ -1,0 +1,26 @@
+{
+  "name": "pi-quota-hud",
+  "version": "0.7.0",
+  "description": "Quota, context and latency HUD for pi: subscription windows, credit balances, TTFT and tokens/s, in the editor widget and the footer status line.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "quota",
+    "usage",
+    "hud",
+    "magpie",
+    "ttft"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/pi-hud.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
