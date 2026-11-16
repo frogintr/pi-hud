@@ -1,10 +1,10 @@
 // pi-hud magpie 聚合网关测试
 // 覆盖：vendor 前缀选择 / 窗口名归一化 / pool 按模型收窄 / 余额型读数 / 合计行收起 / holdsWhy 不渲染 / 未知 vendor 兜底
-// 运行：node --test test/pi-hud.test.mjs
+// 运行：node --test test/
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { stripTypeScriptTypes } from 'node:module';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -53,7 +53,7 @@ const quotas = () => ({
 const normalized = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 const labelsOf = (r) => Array.from(r?.groups?.[0]?.lines ?? [], (l) => l.label);
 
-function loadHud({ fetch: fetcher } = {}) {
+function loadHud({ fetch: fetcher, files } = {}) {
   const requests = [];
   const sandbox = {
     Buffer, URLSearchParams, AbortSignal, console, path, homedir,
@@ -61,7 +61,7 @@ function loadHud({ fetch: fetcher } = {}) {
       constructor(...a) { super(...(a.length ? a : [NOW])); }
       static now() { return NOW; }
     },
-    readFileSync: () => '{}',
+    readFileSync: (p) => (files && files[p] !== undefined ? files[p] : '{}'),
     writeFileSync: () => { throw new Error('Tests must not write credentials'); },
     appendFileSync: () => {},
     process: { on() {} },
@@ -77,7 +77,7 @@ function loadHud({ fetch: fetcher } = {}) {
     .replace('export default function', 'function install');
   vm.createContext(sandbox);
   vm.runInContext(`${source}
-globalThis.t = { sourceMagpie, magpieVendorOf, magpieWindowName, poolMatchesModel, lineText, holdText, usageToken, paint, bar, refreshAll, install, speedLine, pushSpeedSample, wrapSegments, visibleWidth, widgetWidth };`,
+globalThis.t = { sourceMagpie, magpieVendorOf, magpieWindowName, poolMatchesModel, lineText, holdText, usageToken, paint, bar, refreshAll, install, speedLine, pushSpeedSample, wrapSegments, visibleWidth, widgetWidth, getAccessToken, grokCliToken, sourceGrok };`,
   sandbox);
   return { ...sandbox.t, requests };
 }
@@ -429,6 +429,78 @@ test('widget 行：workbuddy 的三段额度排成两行', async () => {
   assert.equal(lines.length, 3, JSON.stringify(lines));
   assert.match(lines[1], /Credits .*Extra credits/);
   assert.match(lines[2], /^deepseek-v4\.1-flash tokens/);
+});
+
+// ── grok / xAI：GrokBot 混合额度 + 官方 CLI 凭据兜底 ───────────────────
+const fakeJwt = (expSeconds) =>
+  `h.${Buffer.from(JSON.stringify({ exp: expSeconds })).toString('base64url')}.s`;
+
+test('grok：GrokBot 混合额度（creditUsagePercent + productUsage GrokBot）', async () => {
+  const authFile = path.join(homedir(), '.pi', 'agent', 'auth.json');
+  const hud = loadHud({
+    files: { [authFile]: JSON.stringify({ xai: { type: 'oauth', access: fakeJwt(NOW / 1000 + 3600), refresh: 'r' } }) },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ config: {
+      currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', end: '2026-11-23T12:01:33+00:00' },
+      creditUsagePercent: 2.0,
+      productUsage: [{ product: 'GrokBot', usagePercent: 2.0 }],
+      isUnifiedBillingUser: true,
+      prepaidBalance: { val: 0 },
+    } }) }),
+  });
+  const r = await hud.sourceGrok();
+  assert.deepEqual(normalized(r.groups[0].lines), [
+    { label: '7d', used: 0.02, reset: '11-23 20:01' },
+  ]);
+});
+
+test('grok：缺 creditUsagePercent 时按 productUsage 的 GrokBot/GrokBuild 取', async () => {
+  const authFile = path.join(homedir(), '.pi', 'agent', 'auth.json');
+  const hud = loadHud({
+    files: { [authFile]: JSON.stringify({ xai: { type: 'oauth', access: fakeJwt(NOW / 1000 + 3600) } }) },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ config: {
+      currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', end: '2026-11-23T12:01:33+00:00' },
+      productUsage: [{ product: 'GrokBot', usagePercent: 37.5 }],
+    } }) }),
+  });
+  const r = await hud.sourceGrok();
+  assert.equal(r.groups[0].lines[0].used, 0.375);
+});
+
+test('grok：pi 的 xai 凭据失效时，借用 ~/.grok/auth.json（只读）', async () => {
+  const authFile = path.join(homedir(), '.pi', 'agent', 'auth.json');
+  const cliFile = path.join(homedir(), '.grok', 'auth.json');
+  const hud = loadHud({
+    files: {
+      [authFile]: JSON.stringify({}),   // pi 这边什么都没登录
+      [cliFile]: JSON.stringify({
+        'https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828': {
+          key: fakeJwt(NOW / 1000 + 3600),
+          refresh_token: 'cli-r',
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        },
+      }),
+    },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ config: {
+      currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', end: '2026-11-23T12:01:33+00:00' },
+      creditUsagePercent: 2.0,
+    } }) }),
+  });
+  const token = await hud.getAccessToken('xai');
+  assert.ok(token, 'CLI 的 token 应被借到');
+  const r = await hud.sourceGrok();
+  assert.equal(r.groups[0].lines[0].used, 0.02);
+});
+
+test('grok：CLI 的 token 已过期就不借（避免撞 401）', async () => {
+  const authFile = path.join(homedir(), '.pi', 'agent', 'auth.json');
+  const cliFile = path.join(homedir(), '.grok', 'auth.json');
+  const hud = loadHud({
+    files: {
+      [authFile]: JSON.stringify({}),
+      [cliFile]: JSON.stringify({ 'https://auth.x.ai::x': { key: fakeJwt(NOW / 1000 - 600) } }),
+    },
+  });
+  assert.equal(hud.grokCliToken(), null);
 });
 
 test('account.error 在 windows 为空时显式渲染为 status 警告行，不静默吞掉', async () => {

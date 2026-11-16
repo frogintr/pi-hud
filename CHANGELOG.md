@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.0] - 2026-11-16
+
+- xAI: Grok + X unified plan ("GrokBot") is read from `isUnifiedBillingUser` payloads (`creditUsagePercent`, or
+  `productUsage` rows named `GrokBot` / `GrokBuild`).
+- xAI: when pi's own credential is stale, fall back to the Grok CLI's login in `~/.grok/auth.json` (read-only, so the
+  CLI keeps its refresh token).
+- Verified against live endpoints: direct `openai-codex`, `xai`, `openrouter`; magpie vendors `kimi-code-cn`,
+  `workbuddy`, `agy-cli`, `grok`. See the README's "Verified" table.
+
 ## [0.7.0] - 2026-11-16
 
 - Widget wraps quota windows at `" · "` boundaries instead of letting them be cut mid-value.

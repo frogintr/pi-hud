@@ -94,22 +94,53 @@ const OAUTH_REFRESH: Record<string, { endpoint: string; clientId: string }> = {
 };
 const freshTokens = new Map<string, { access: string; at: number; expiresAt: number }>();
 
+/** xAI 官方 CLI 的登录（`~/.grok/auth.json`，客户端 id 与 pi 相同）。
+ *  **只读**：grok CLI 自己会刷新它的 token；HUD 在这里刷新会把 CLI 轮换掉的
+ *  refresh token 写乱，反而把它登出。所以只在 pi 的 auth.json 不可用时借用。 */
+function grokCliToken(): string | null {
+  try {
+    const raw = readFileSync(path.join(homedir(), ".grok", "auth.json"), "utf8");
+    const entries: Record<string, any> = JSON.parse(raw);
+    for (const [key, val] of Object.entries(entries)) {
+      if (!key.includes("auth.x.ai")) continue;
+      const token = typeof val?.key === "string" ? val.key : "";
+      if (!token) continue;
+      try {
+        const claims = decodeJwtPayload(token);
+        if (claims?.exp && claims.exp * 1000 < Date.now() + 120_000) continue; // 已过期，别拿去撞 401
+      } catch {
+        /* 解不开就照用，交给调用方判断 */
+      }
+      return token;
+    }
+  } catch {
+    /* 没装 grok CLI / 没登录 */
+  }
+  return null;
+}
+
 /** 拿可用 access token：未过期直接用；过期则用 refresh token 换新（并回写 auth.json，xAI 会轮换 refresh） */
 async function getAccessToken(providerId: string): Promise<string | null> {
   const cached = freshTokens.get(providerId);
   // 按实际过期时间缓存（kimi access 仅 15 分钟寿命，不能固定 50 分钟）
   if (cached && Date.now() < cached.expiresAt - 120_000) return cached.access;
   const auth = readAuth()[providerId];
-  if (auth?.type !== "oauth" || !auth.access) return null;
-  // JWT 未过期就直接用，避免无谓刷新
-  try {
-    const claims = decodeJwtPayload(auth.access);
-    if (claims?.exp && claims.exp * 1000 > Date.now() + 120_000) return auth.access;
-  } catch {
-    /* fall through */
+  const usable = auth?.type === "oauth" && auth.access ? String(auth.access) : "";
+  if (usable) {
+    // JWT 未过期就直接用，避免无谓刷新
+    try {
+      const claims = decodeJwtPayload(usable);
+      if (claims?.exp && claims.exp * 1000 > Date.now() + 120_000) return usable;
+    } catch {
+      /* 解不开 → 当过期处理 */
+    }
   }
   const conf = OAUTH_REFRESH[providerId];
-  if (!conf || !auth.refresh) return auth.access ?? null;
+  if (!usable || !conf || !auth?.refresh) {
+    // pi 这边没有可用凭据：xAI 可以借用官方 CLI 的登录（同一账号、同一 client id）
+    if (providerId === "xai") return grokCliToken() ?? (usable || null);
+    return usable || null;
+  }
   try {
     const body = new URLSearchParams({
       grant_type: "refresh_token",
@@ -122,9 +153,9 @@ async function getAccessToken(providerId: string): Promise<string | null> {
       body,
       signal: AbortSignal.timeout(10_000),
     });
-    if (!r.ok) return auth.access ?? null;
+    if (!r.ok) return (providerId === "xai" ? grokCliToken() : null) ?? usable;
     const d: any = await r.json();
-    if (!d.access_token) return auth.access ?? null;
+    if (!d.access_token) return (providerId === "xai" ? grokCliToken() : null) ?? usable;
     const expiresAt = Date.now() + (typeof d.expires_in === "number" ? d.expires_in : 3000) * 1000;
     freshTokens.set(providerId, { access: d.access_token, at: Date.now(), expiresAt });
     // xAI 轮换 refresh token，必须回写，否则 pi 自己的刷新链路会断
@@ -143,7 +174,7 @@ async function getAccessToken(providerId: string): Promise<string | null> {
     }
     return d.access_token;
   } catch {
-    return auth.access ?? null;
+    return (providerId === "xai" ? grokCliToken() : null) ?? usable;
   }
 }
 
@@ -385,8 +416,10 @@ async function fetchMagpieQuota(vendor: string): Promise<SourceResult | null> {
 function grokWeeklyUsed(config: any): number | null {
   if (typeof config?.creditUsagePercent === "number") return config.creditUsagePercent / 100;
   const products: any[] = Array.isArray(config?.productUsage) ? config.productUsage : [];
-  const build = products.find((p) => p?.product === "GrokBuild" && typeof p.usagePercent === "number");
-  if (build) return build.usagePercent / 100;
+  // 产品名随订阅套餐变：GrokBuild（旧） / GrokBot（Grok + X 混合额度）
+  const pool = products.find((p) => typeof p?.usagePercent === "number" &&
+    /^(GrokBuild|GrokBot)$/i.test(String(p.product ?? "")));
+  if (pool) return pool.usagePercent / 100;
   const period = String(config?.currentPeriod?.type ?? "");
   if (period.includes("WEEKLY")) return 0;
   return null;

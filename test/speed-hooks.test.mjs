@@ -1,9 +1,9 @@
 // pi-hud 延迟/吞吐：真实定时器下跑一遍事件顺序，验证 TTFT 与 t/s 落到 footer 状态行
-// 运行：node --test test/speed-hooks.test.mjs
+// 运行：node --test test/
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { stripTypeScriptTypes } from 'node:module';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
